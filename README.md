@@ -7,7 +7,7 @@
 - статистического анализа факторов цены;
 - обучения моделей регрессии для прогноза цены автомобиля.
 
-Проект рассчитан на Python `3.11+`. В текущей рабочей среде использовался Python `3.13`.
+В текущей рабочей среде использовался Python `3.13`.
 
 ## Что делает проект
 
@@ -81,18 +81,11 @@
 ### 1. Клонировать репозиторий
 
 ```bash
-git clone <REPOSITORY_URL>
+git clone https://github.com/DJpopusk/autoru-market-research
 cd autoru_market_research
 ```
 
 ### 2. Создать виртуальное окружение
-
-```bash
-python3.13 -m venv .venv
-source .venv/bin/activate
-```
-
-Если у тебя `python3` уже указывает на Python `3.13`, можно так:
 
 ```bash
 python3 -m venv .venv
@@ -149,18 +142,6 @@ python main.py scrape --url "https://auto.ru/cars/all/" --pages 20
 - `data/raw/autoru_state.json`
 - `data/raw/autoru_checkpoint.jsonl`
 
-Когда запускать:
-
-- когда хочешь собрать данные впервые;
-- когда хочешь расширить датасет, увеличив `--pages`;
-- когда хочешь повторно использовать уже сохраненный checkpoint без потери данных.
-
-Пример:
-
-```bash
-python main.py scrape --url "https://auto.ru/cars/all/" --pages 50
-```
-
 ### `preprocess`
 
 Команда:
@@ -185,11 +166,6 @@ python main.py preprocess --input data/raw/autoru_raw.parquet --output-dir data/
 - `data/processed/cleaned_dataset.parquet`
 - `data/processed/preprocessing_summary.json`
 
-Когда запускать:
-
-- после каждого нового `scrape`;
-- перед любым анализом или обучением модели.
-
 ### `analyze1`
 
 Команда:
@@ -211,12 +187,6 @@ python main.py analyze1 --input data/processed/cleaned_dataset.parquet
 - таблицы в `reports/`
 - графики в `figures/`
 - итоговый отчёт `reports/stage1_report.md`
-
-Когда запускать:
-
-- когда нужен исследовательский анализ данных;
-- перед построением финальной модели;
-- для подготовки отчёта по статистике.
 
 ### `analyze2`
 
@@ -254,35 +224,12 @@ python main.py analyze2 --input data/processed/cleaned_dataset.parquet
 - `models/best_price_model.joblib`
 - диагностические графики в `figures/`
 
-Когда запускать:
-
-- после `preprocess`;
-- когда нужна оценка качества прогноза цены;
-- когда нужно сохранить лучшую модель.
-
-### `full-pipeline`
-
-Команда:
-
-```bash
-python main.py full-pipeline --url "https://auto.ru/cars/all/" --pages 20
-```
-
-Что делает:
-
-- последовательно выполняет `scrape -> preprocess -> analyze1 -> analyze2`.
-
-Когда запускать:
-
-- если нужен полный цикл одной командой;
-- если не требуется вручную разбирать промежуточные этапы.
-
 ## Полезные сценарии запуска
 
 ### Собрать данные только один раз
 
 ```bash
-python main.py scrape --url "https://auto.ru/cars/all/" --pages 20
+python main.py scrape --url "https://auto.ru/cars/all/" --pages 100
 ```
 
 ### Повторно прогнать аналитику на уже собранных данных
@@ -362,11 +309,6 @@ python main.py analyze2 --input data/processed/cleaned_dataset.parquet
 - `R²` — доля объяснённой вариации цены
 - `MAPE` — средняя относительная ошибка в процентах
 
-Пример:
-
-- `MAE = 368000` означает, что модель в среднем ошибается примерно на `368 тыс. руб.`
-- `MAPE = 7.2%` означает средний относительный промах около `7.2%`
-
 ## Где лежат результаты
 
 - сырые данные: `data/raw/`
@@ -389,46 +331,6 @@ pytest -q
 - parsing helpers
 - resume-сценарий парсера
 - preprocessing
-
-## Типичные проблемы
-
-### `python: command not found`
-
-Используй явный бинарник:
-
-```bash
-python3.13 -m venv .venv
-source .venv/bin/activate
-```
-
-### `playwright: command not found`
-
-После активации окружения установи зависимости и браузер:
-
-```bash
-python -m pip install -r requirements.txt
-playwright install chromium
-```
-
-### `Input dataset is empty`
-
-Проверь порядок запуска:
-
-```bash
-python main.py scrape --url "https://auto.ru/cars/all/" --pages 20
-python main.py preprocess --input data/raw/autoru_raw.parquet --output-dir data/processed
-python main.py analyze1 --input data/processed/cleaned_dataset.parquet
-```
-
-### Повторный `scrape` ничего не скачивает
-
-Это нормально, если:
-
-- ты уже проходил те же страницы;
-- состояние сохранено в `data/raw/autoru_state.json`;
-- данные есть в `data/raw/autoru_checkpoint.jsonl`.
-
-В таком случае проект повторно использует уже собранные записи.
 
 ## Что лучше улучшать дальше
 

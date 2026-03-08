@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from sklearn.compose import ColumnTransformer
+from sklearn.compose import ColumnTransformer, TransformedTargetRegressor
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import Lasso, LinearRegression, Ridge
@@ -22,6 +22,7 @@ from sklearn.model_selection import (
     GridSearchCV,
     KFold,
     RandomizedSearchCV,
+    StratifiedKFold,
     cross_validate,
     train_test_split,
 )
@@ -45,6 +46,7 @@ class RegressionConfig:
     test_size: float = 0.2
     random_state: int = 42
     cv_folds: int = 5
+    max_stratification_bins: int = 10
 
 
 def _make_ohe() -> OneHotEncoder:
@@ -100,10 +102,86 @@ def _evaluate_predictions(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, f
     }
 
 
-def _extract_feature_importance(trained_pipeline: Pipeline) -> pd.DataFrame:
+def _prune_feature_columns(feature_cols: list[str]) -> tuple[list[str], list[str]]:
+    """Drop redundant features that duplicate the same signal."""
+    dropped_features: list[str] = []
+    pruned = feature_cols.copy()
+
+    # age = current_year - year; keeping both adds multicollinearity without helping tree models much.
+    if "age" in pruned and "year" in pruned:
+        pruned.remove("year")
+        dropped_features.append("year")
+
+    return pruned, dropped_features
+
+
+def _make_stratification_bins(
+    y: pd.Series,
+    *,
+    max_bins: int,
+    min_count_per_bin: int,
+) -> pd.Series | None:
+    """Create quantile bins suitable for stratified splitting."""
+    unique_values = int(y.nunique(dropna=True))
+    upper_bins = min(max_bins, unique_values)
+
+    for bins_count in range(upper_bins, 1, -1):
+        try:
+            bins = pd.qcut(y, q=bins_count, labels=False, duplicates="drop")
+        except ValueError:
+            continue
+
+        if bins is None:
+            continue
+
+        counts = bins.value_counts(dropna=True)
+        if len(counts) < 2:
+            continue
+        if int(counts.min()) < min_count_per_bin:
+            continue
+        return bins.astype(int)
+
+    return None
+
+
+def _build_cv_splits(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    config: RegressionConfig,
+) -> tuple[list[tuple[np.ndarray, np.ndarray]], bool]:
+    """Build CV splits, preferring stratification over price bins when possible."""
+    stratify_bins = _make_stratification_bins(
+        y_train,
+        max_bins=config.max_stratification_bins,
+        min_count_per_bin=config.cv_folds,
+    )
+    if stratify_bins is not None:
+        splitter = StratifiedKFold(
+            n_splits=config.cv_folds,
+            shuffle=True,
+            random_state=config.random_state,
+        )
+        return list(splitter.split(X_train, stratify_bins)), True
+
+    splitter = KFold(n_splits=config.cv_folds, shuffle=True, random_state=config.random_state)
+    return list(splitter.split(X_train, y_train)), False
+
+
+def _wrap_target_transform(pipeline: Pipeline) -> TransformedTargetRegressor:
+    """Train regressors on log-price while exposing predictions in the original price scale."""
+    return TransformedTargetRegressor(
+        regressor=pipeline,
+        func=np.log1p,
+        inverse_func=np.expm1,
+        check_inverse=False,
+    )
+
+
+def _extract_feature_importance(trained_pipeline: TransformedTargetRegressor) -> pd.DataFrame:
     """Extract feature importance / coefficient magnitudes."""
-    preprocessor = trained_pipeline.named_steps["preprocessor"]
-    model = trained_pipeline.named_steps["model"]
+    regressor = trained_pipeline.regressor_
+    preprocessor = regressor.named_steps["preprocessor"]
+    model = regressor.named_steps["model"]
 
     feature_names = preprocessor.get_feature_names_out()
     values = None
@@ -182,6 +260,7 @@ def run_regression_experiment(df: pd.DataFrame, config: RegressionConfig) -> dic
         "price_log1p",
     }
     feature_cols = [col for col in model_df.columns if col not in drop_cols]
+    feature_cols, dropped_features = _prune_feature_columns(feature_cols)
 
     X = model_df[feature_cols]
     y = model_df[config.target_column].astype(float)
@@ -193,73 +272,88 @@ def run_regression_experiment(df: pd.DataFrame, config: RegressionConfig) -> dic
     categorical_cols = [col for col in categorical_cols if X[col].notna().any()]
     X = X[numeric_cols + categorical_cols]
 
+    stratify_bins = _make_stratification_bins(
+        y,
+        max_bins=config.max_stratification_bins,
+        min_count_per_bin=2,
+    )
+
     X_train, X_test, y_train, y_test = train_test_split(
         X,
         y,
         test_size=config.test_size,
         random_state=config.random_state,
+        stratify=stratify_bins,
     )
 
-    model_defs: dict[str, tuple[Pipeline, bool]] = {
+    cv_splits, used_stratified_cv = _build_cv_splits(X_train, y_train, config)
+    used_stratified_split = stratify_bins is not None
+
+    model_defs: dict[str, TransformedTargetRegressor] = {
         "linear_regression": (
-            Pipeline(
-                steps=[
-                    ("preprocessor", _build_preprocessor(numeric_cols, categorical_cols, scale_numeric=True)),
-                    ("model", LinearRegression()),
-                ]
-            ),
-            True,
+            _wrap_target_transform(
+                Pipeline(
+                    steps=[
+                        ("preprocessor", _build_preprocessor(numeric_cols, categorical_cols, scale_numeric=True)),
+                        ("model", LinearRegression()),
+                    ]
+                )
+            )
         ),
         "ridge": (
-            Pipeline(
-                steps=[
-                    ("preprocessor", _build_preprocessor(numeric_cols, categorical_cols, scale_numeric=True)),
-                    ("model", Ridge(random_state=config.random_state)),
-                ]
-            ),
-            True,
+            _wrap_target_transform(
+                Pipeline(
+                    steps=[
+                        ("preprocessor", _build_preprocessor(numeric_cols, categorical_cols, scale_numeric=True)),
+                        ("model", Ridge(random_state=config.random_state)),
+                    ]
+                )
+            )
         ),
         "lasso": (
-            Pipeline(
-                steps=[
-                    ("preprocessor", _build_preprocessor(numeric_cols, categorical_cols, scale_numeric=True)),
-                    ("model", Lasso(random_state=config.random_state, max_iter=10_000)),
-                ]
-            ),
-            True,
+            _wrap_target_transform(
+                Pipeline(
+                    steps=[
+                        ("preprocessor", _build_preprocessor(numeric_cols, categorical_cols, scale_numeric=True)),
+                        ("model", Lasso(random_state=config.random_state, max_iter=50_000)),
+                    ]
+                )
+            )
         ),
         "random_forest": (
-            Pipeline(
-                steps=[
-                    ("preprocessor", _build_preprocessor(numeric_cols, categorical_cols, scale_numeric=False)),
-                    (
-                        "model",
-                        RandomForestRegressor(
-                            n_estimators=350,
-                            random_state=config.random_state,
-                            n_jobs=-1,
-                            min_samples_leaf=1,
+            _wrap_target_transform(
+                Pipeline(
+                    steps=[
+                        ("preprocessor", _build_preprocessor(numeric_cols, categorical_cols, scale_numeric=False)),
+                        (
+                            "model",
+                            RandomForestRegressor(
+                                n_estimators=350,
+                                random_state=config.random_state,
+                                n_jobs=-1,
+                                min_samples_leaf=1,
+                            ),
                         ),
-                    ),
-                ]
-            ),
-            False,
+                    ]
+                )
+            )
         ),
         "gradient_boosting": (
-            Pipeline(
-                steps=[
-                    ("preprocessor", _build_preprocessor(numeric_cols, categorical_cols, scale_numeric=False)),
-                    ("model", GradientBoostingRegressor(random_state=config.random_state)),
-                ]
-            ),
-            False,
+            _wrap_target_transform(
+                Pipeline(
+                    steps=[
+                        ("preprocessor", _build_preprocessor(numeric_cols, categorical_cols, scale_numeric=False)),
+                        ("model", GradientBoostingRegressor(random_state=config.random_state)),
+                    ]
+                )
+            )
         ),
     }
 
     try:
         from xgboost import XGBRegressor
 
-        model_defs["xgboost"] = (
+        model_defs["xgboost"] = _wrap_target_transform(
             Pipeline(
                 steps=[
                     ("preprocessor", _build_preprocessor(numeric_cols, categorical_cols, scale_numeric=False)),
@@ -277,22 +371,19 @@ def run_regression_experiment(df: pd.DataFrame, config: RegressionConfig) -> dic
                         ),
                     ),
                 ]
-            ),
-            False,
+            )
         )
     except Exception:  # noqa: BLE001
         LOGGER.info("xgboost is not available, skipping this model.")
 
-    kfold = KFold(n_splits=config.cv_folds, shuffle=True, random_state=config.random_state)
-
     metrics_rows: list[dict[str, Any]] = []
     cv_rows: list[dict[str, Any]] = []
-    trained_models: dict[str, Pipeline] = {}
+    trained_models: dict[str, TransformedTargetRegressor] = {}
 
-    for name, (pipeline, _) in model_defs.items():
+    for name, pipeline in model_defs.items():
         LOGGER.info("Training model: %s", name)
         pipeline.fit(X_train, y_train)
-        predictions = pipeline.predict(X_test)
+        predictions = np.maximum(pipeline.predict(X_test), 0.0)
 
         metrics = _evaluate_predictions(y_test.to_numpy(), predictions)
         metrics_rows.append({"model": name, **metrics})
@@ -301,13 +392,13 @@ def run_regression_experiment(df: pd.DataFrame, config: RegressionConfig) -> dic
             pipeline,
             X_train,
             y_train,
-            cv=kfold,
             scoring={
                 "mae": "neg_mean_absolute_error",
                 "rmse": "neg_root_mean_squared_error",
                 "r2": "r2",
             },
             n_jobs=-1,
+            cv=cv_splits,
         )
 
         cv_rows.append(
@@ -322,61 +413,89 @@ def run_regression_experiment(df: pd.DataFrame, config: RegressionConfig) -> dic
 
     LOGGER.info("Hyperparameter tuning for ridge and random_forest...")
     ridge_search = GridSearchCV(
-        estimator=Pipeline(
-            steps=[
-                ("preprocessor", _build_preprocessor(numeric_cols, categorical_cols, scale_numeric=True)),
-                ("model", Ridge(random_state=config.random_state)),
-            ]
+        estimator=_wrap_target_transform(
+            Pipeline(
+                steps=[
+                    ("preprocessor", _build_preprocessor(numeric_cols, categorical_cols, scale_numeric=True)),
+                    ("model", Ridge(random_state=config.random_state)),
+                ]
+            )
         ),
-        param_grid={"model__alpha": [0.1, 1.0, 5.0, 10.0, 25.0, 50.0, 100.0]},
+        param_grid={"regressor__model__alpha": [0.1, 1.0, 5.0, 10.0, 25.0, 50.0, 100.0]},
         scoring="neg_root_mean_squared_error",
-        cv=kfold,
+        cv=cv_splits,
         n_jobs=-1,
     )
     ridge_search.fit(X_train, y_train)
     ridge_best = ridge_search.best_estimator_
-    ridge_pred = ridge_best.predict(X_test)
+    ridge_pred = np.maximum(ridge_best.predict(X_test), 0.0)
     metrics_rows.append({"model": "ridge_tuned", **_evaluate_predictions(y_test.to_numpy(), ridge_pred)})
+    ridge_cv = cross_validate(
+        ridge_best,
+        X_train,
+        y_train,
+        cv=cv_splits,
+        scoring={
+            "mae": "neg_mean_absolute_error",
+            "rmse": "neg_root_mean_squared_error",
+            "r2": "r2",
+        },
+        n_jobs=-1,
+    )
     cv_rows.append(
         {
             "model": "ridge_tuned",
-            "cv_mae_mean": float("nan"),
-            "cv_rmse_mean": float(-ridge_search.best_score_),
-            "cv_r2_mean": float("nan"),
+            "cv_mae_mean": float(-np.mean(ridge_cv["test_mae"])),
+            "cv_rmse_mean": float(-np.mean(ridge_cv["test_rmse"])),
+            "cv_r2_mean": float(np.mean(ridge_cv["test_r2"])),
         }
     )
     trained_models["ridge_tuned"] = ridge_best
 
     rf_search = RandomizedSearchCV(
-        estimator=Pipeline(
-            steps=[
-                ("preprocessor", _build_preprocessor(numeric_cols, categorical_cols, scale_numeric=False)),
-                ("model", RandomForestRegressor(random_state=config.random_state, n_jobs=-1)),
-            ]
+        estimator=_wrap_target_transform(
+            Pipeline(
+                steps=[
+                    ("preprocessor", _build_preprocessor(numeric_cols, categorical_cols, scale_numeric=False)),
+                    ("model", RandomForestRegressor(random_state=config.random_state, n_jobs=-1)),
+                ]
+            )
         ),
         param_distributions={
-            "model__n_estimators": [200, 300, 500],
-            "model__max_depth": [None, 10, 20, 30],
-            "model__min_samples_split": [2, 5, 10],
-            "model__min_samples_leaf": [1, 2, 4],
-            "model__max_features": ["sqrt", "log2", None],
+            "regressor__model__n_estimators": [200, 300, 500],
+            "regressor__model__max_depth": [None, 10, 20, 30],
+            "regressor__model__min_samples_split": [2, 5, 10],
+            "regressor__model__min_samples_leaf": [1, 2, 4],
+            "regressor__model__max_features": ["sqrt", "log2", None],
         },
         n_iter=12,
         scoring="neg_root_mean_squared_error",
-        cv=kfold,
+        cv=cv_splits,
         random_state=config.random_state,
         n_jobs=-1,
     )
     rf_search.fit(X_train, y_train)
     rf_best = rf_search.best_estimator_
-    rf_pred = rf_best.predict(X_test)
+    rf_pred = np.maximum(rf_best.predict(X_test), 0.0)
     metrics_rows.append({"model": "random_forest_tuned", **_evaluate_predictions(y_test.to_numpy(), rf_pred)})
+    rf_cv = cross_validate(
+        rf_best,
+        X_train,
+        y_train,
+        cv=cv_splits,
+        scoring={
+            "mae": "neg_mean_absolute_error",
+            "rmse": "neg_root_mean_squared_error",
+            "r2": "r2",
+        },
+        n_jobs=-1,
+    )
     cv_rows.append(
         {
             "model": "random_forest_tuned",
-            "cv_mae_mean": float("nan"),
-            "cv_rmse_mean": float(-rf_search.best_score_),
-            "cv_r2_mean": float("nan"),
+            "cv_mae_mean": float(-np.mean(rf_cv["test_mae"])),
+            "cv_rmse_mean": float(-np.mean(rf_cv["test_rmse"])),
+            "cv_r2_mean": float(np.mean(rf_cv["test_r2"])),
         }
     )
     trained_models["random_forest_tuned"] = rf_best
@@ -389,7 +508,7 @@ def run_regression_experiment(df: pd.DataFrame, config: RegressionConfig) -> dic
 
     best_model_name = str(metrics_df.iloc[0]["model"])
     best_model = trained_models[best_model_name]
-    best_pred = best_model.predict(X_test)
+    best_pred = np.maximum(best_model.predict(X_test), 0.0)
 
     model_path = config.models_dir / "best_price_model.joblib"
     joblib.dump(best_model, model_path)
@@ -416,6 +535,10 @@ def run_regression_experiment(df: pd.DataFrame, config: RegressionConfig) -> dic
         "train_rows": int(len(X_train)),
         "test_rows": int(len(X_test)),
         "features_count": int(X.shape[1]),
+        "dropped_features": dropped_features,
+        "target_transform": "log1p/expm1",
+        "used_stratified_split": used_stratified_split,
+        "used_stratified_cv": used_stratified_cv,
     }
 
     summary_path = config.reports_dir / "stage2_summary.json"
@@ -427,6 +550,9 @@ def run_regression_experiment(df: pd.DataFrame, config: RegressionConfig) -> dic
         f"Train rows: **{len(X_train)}**",
         f"Test rows: **{len(X_test)}**",
         f"Features: **{X.shape[1]}**",
+        f"Target transform: **log1p(price)** during training, inverse **expm1** for predictions",
+        f"Stratified train/test split by price bins: **{used_stratified_split}**",
+        f"Stratified cross-validation by price bins: **{used_stratified_cv}**",
         "",
         "## Best model",
         f"- Name: `{best_model_name}`",
@@ -434,6 +560,9 @@ def run_regression_experiment(df: pd.DataFrame, config: RegressionConfig) -> dic
         f"- RMSE: {metrics_df.iloc[0]['rmse']:.2f}",
         f"- R2: {metrics_df.iloc[0]['r2']:.4f}",
         f"- MAPE: {metrics_df.iloc[0]['mape']:.2f}%",
+        "",
+        "## Feature handling",
+        f"- Dropped redundant features: `{', '.join(dropped_features) if dropped_features else 'none'}`",
         "",
         "## Saved artifacts",
         f"- Best model: `{model_path}`",

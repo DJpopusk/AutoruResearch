@@ -35,6 +35,9 @@
 
 4. `analyze2`
    - обучает несколько моделей регрессии;
+   - использует `log1p(price)` как target во время обучения с обратным преобразованием в рубли;
+   - делает стратифицированное разбиение по ценовым корзинам;
+   - сравнивает как общие модели, так и routed-модель с отдельными регрессорами для `new` и `used` по полю `condition`;
    - сравнивает их по метрикам;
    - сохраняет лучшую модель и отчеты.
 
@@ -121,11 +124,20 @@ python main.py analyze2 --input data/processed/cleaned_dataset.parquet
 
 ### `scrape`
 
-Команда:
+Базовая команда:
 
 ```bash
 python main.py scrape --url "https://auto.ru/cars/all/" --pages 20
 ```
+
+Полезные параметры:
+
+- `--start-page N` — начать обход не с resume-state, а с указанной страницы каталога
+- `--condition-filter used|new|all` — фильтр по типу объявления
+- `--seller-type-filter dealer|private|all` — фильтр по типу продавца
+- `--min-mileage N` — отбор по минимальному пробегу
+- `--playwright` — браузерный backend, если обычный HTML нестабилен
+- `--challenge-cooldown` / `--max-consecutive-challenge-pages` — безопасная реакция на anti-bot/stub pages
 
 Что делает:
 
@@ -133,7 +145,8 @@ python main.py scrape --url "https://auto.ru/cars/all/" --pages 20
 - собирает объявления;
 - сохраняет сырые данные в `CSV` и `Parquet`;
 - пишет состояние обхода в checkpoint/state;
-- поддерживает безопаский повторный запуск.
+- поддерживает безопаский повторный запуск;
+- распознаёт challenge/stub-страницы и уходит в backoff вместо бесконечного пустого обхода.
 
 Что создаёт:
 
@@ -144,10 +157,16 @@ python main.py scrape --url "https://auto.ru/cars/all/" --pages 20
 
 ### `preprocess`
 
-Команда:
+Базовая команда:
 
 ```bash
 python main.py preprocess --input data/raw/autoru_raw.parquet --output-dir data/processed
+```
+
+Если нужно отсечь коммерчески похожие карточки:
+
+```bash
+python main.py preprocess --input data/raw/autoru_raw.parquet --output-dir data/processed --exclude-commercial-like
 ```
 
 Что делает:
@@ -158,7 +177,8 @@ python main.py preprocess --input data/raw/autoru_raw.parquet --output-dir data/
 - приводит признаки к нужным типам;
 - нормализует категории;
 - фильтрует явный мусор;
-- добавляет вычисляемые признаки.
+- добавляет вычисляемые признаки;
+- помечает объявления эвристикой `is_commercial_like`.
 
 Что создаёт:
 
@@ -198,8 +218,9 @@ python main.py analyze2 --input data/processed/cleaned_dataset.parquet
 
 Что делает:
 
-- делит данные на `train/test`;
+- делит данные на `train/test` со стратификацией по ценовым корзинам;
 - кодирует категориальные признаки;
+- обучает модели на `log1p(price)` и возвращает прогноз в исходной шкале цены;
 - обучает модели:
   - `Linear Regression`
   - `Ridge`
@@ -285,13 +306,17 @@ python main.py analyze2 --input data/processed/cleaned_dataset.parquet
 
 - `age`
 - `price_log1p`
+- `commercial_signal_count`
+- `is_commercial_like`
 
 ## Ограничения парсинга
 
 - Структура Auto.ru меняется, поэтому селекторы вынесены отдельно в `src/parser/selectors.py`.
 - Парсер не использует агрессивный scraping и не пытается обходить капчу/антибот.
+- При подозрении на anti-bot/challenge страницу парсер делает backoff и останавливает сессию после нескольких подряд challenge-ответов.
 - Если часть полей не найдена, запись не падает, а сохраняется частично.
 - При повторном запуске `scrape` используется checkpoint/state, поэтому уже собранные данные не теряются.
+- Для длинных прогонов можно стартовать с нужной страницы через `--start-page`.
 - Парсить весь `cars/all/` нецелесообразно: лучше ограничивать выборку по страницам или сегментам.
 
 ## Как интерпретировать результаты модели
@@ -301,6 +326,8 @@ python main.py analyze2 --input data/processed/cleaned_dataset.parquet
 - `reports/stage2_model_metrics.csv`
 - `reports/stage2_summary.json`
 - `reports/stage2_report.md`
+- `reports/stage2_metrics_by_condition.csv`
+- `reports/stage2_condition_report.md`
 
 Главные метрики:
 
@@ -331,6 +358,7 @@ pytest -q
 - parsing helpers
 - resume-сценарий парсера
 - preprocessing
+- регрессионные helper-функции и routed-модель по `condition`
 
 ## Что лучше улучшать дальше
 

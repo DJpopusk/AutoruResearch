@@ -28,6 +28,7 @@ class PreprocessConfig:
     max_reasonable_price: int = 500_000_000
     price_low_quantile: float = 0.005
     price_high_quantile: float = 0.995
+    exclude_commercial_like: bool = False
 
 
 CATEGORY_MAPS: dict[str, dict[str, str]] = {
@@ -66,6 +67,28 @@ CATEGORY_MAPS: dict[str, dict[str, str]] = {
         "used": "used",
     },
 }
+
+COMMERCIAL_KEYWORDS = (
+    "кредит",
+    "лизинг",
+    "trade-in",
+    "трейд-ин",
+    "трейд ин",
+    "ежемесячный платеж",
+    "первоначальный взнос",
+    "скидка",
+    "выгода",
+    "спецпредложение",
+    "акция",
+    "официальный дилер",
+    "одобрение",
+    "доставка",
+    "в наличии",
+    "доступен",
+    "звоните",
+    "салон",
+    "рассрочка",
+)
 
 
 def _to_numeric(series: pd.Series) -> pd.Series:
@@ -106,6 +129,30 @@ def _ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         if column not in df.columns:
             df[column] = None
     return df[AUTORU_SCHEMA].copy()
+
+
+def _count_commercial_signals(description: str, seller_type: str, condition: str, mileage: float | int | None) -> int:
+    """Count heuristic signals that listing text looks commercial/advertising-like."""
+    text = "" if description is None or description != description else str(description)
+    text = text.lower()
+    signals = sum(keyword in text for keyword in COMMERCIAL_KEYWORDS)
+
+    if seller_type == "dealer":
+        signals += 1
+    if condition == "new":
+        signals += 1
+
+    mileage_numeric: float | None = None
+    if mileage is not None and mileage == mileage:
+        try:
+            mileage_numeric = float(mileage)
+        except (TypeError, ValueError):
+            mileage_numeric = None
+
+    if mileage_numeric is not None and mileage_numeric == 0:
+        signals += 1
+
+    return signals
 
 
 def _filter_outliers(df: pd.DataFrame, config: PreprocessConfig) -> pd.DataFrame:
@@ -159,8 +206,22 @@ def preprocess_dataset(config: PreprocessConfig) -> pd.DataFrame:
     df["description_text"] = df["description_text"].astype(str).replace({"nan": "", "None": ""})
     df["parsed_at"] = pd.to_datetime(df["parsed_at"], errors="coerce", utc=True)
 
+    df["commercial_signal_count"] = [
+        _count_commercial_signals(description, seller_type, condition, mileage)
+        for description, seller_type, condition, mileage in zip(
+            df["description_text"],
+            df["seller_type"],
+            df["condition"],
+            df["mileage"],
+        )
+    ]
+    df["is_commercial_like"] = df["commercial_signal_count"] >= 2
+
     before_outliers = len(df)
     df = _filter_outliers(df, config=config)
+
+    if config.exclude_commercial_like:
+        df = df.loc[~df["is_commercial_like"]].copy()
 
     df = df[df["price"].notna()]
     df["price"] = df["price"].astype(float)
@@ -182,6 +243,8 @@ def preprocess_dataset(config: PreprocessConfig) -> pd.DataFrame:
         "cleaned_rows": int(len(df)),
         "dropped_rows": int(raw_count - len(df)),
         "missing_price_after_cleaning": int(df["price"].isna().sum()),
+        "commercial_like_rows": int(df["is_commercial_like"].sum()) if "is_commercial_like" in df.columns else 0,
+        "exclude_commercial_like": bool(config.exclude_commercial_like),
         "generated_at": datetime.now().isoformat(),
     }
     write_json(config.output_dir / "preprocessing_summary.json", summary)

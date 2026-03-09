@@ -83,3 +83,54 @@ def test_preprocess_keeps_rows_with_missing_year_if_other_values_are_valid(tmp_p
     assert len(cleaned) == 1
     assert float(cleaned.iloc[0]["price"]) == 3200000.0
     assert pd.isna(cleaned.iloc[0]["year"])
+
+
+def test_preprocess_marks_and_optionally_excludes_commercial_like_rows(tmp_path: Path) -> None:
+    raw = pd.DataFrame(
+        [
+            {
+                "brand": "audi",
+                "model": "q5",
+                "year": "2024",
+                "price": "5 500 000 ₽",
+                "mileage": "0 км",
+                "seller_type": "Дилер",
+                "condition": "новый",
+                "description_text": "Кредит, лизинг, trade-in, скидка, звоните!",
+                "url": "u1",
+                "parsed_at": "2026-01-01T10:00:00Z",
+            },
+            {
+                "brand": "toyota",
+                "model": "camry",
+                "year": "2019",
+                "price": "2 300 000 ₽",
+                "mileage": "80 000 км",
+                "seller_type": "Частник",
+                "condition": "б/у",
+                "description_text": "Один владелец, обслуживалась вовремя.",
+                "url": "u2",
+                "parsed_at": "2026-01-01T10:00:00Z",
+            },
+        ]
+    )
+
+    input_path = tmp_path / "raw.csv"
+    raw.to_csv(input_path, index=False)
+
+    cleaned = preprocess_dataset(PreprocessConfig(input_path=input_path, output_dir=tmp_path / "processed"))
+    row_map = {row["url"]: row for _, row in cleaned.iterrows()}
+
+    assert bool(row_map["u1"]["is_commercial_like"]) is True
+    assert int(row_map["u1"]["commercial_signal_count"]) >= 2
+    assert bool(row_map["u2"]["is_commercial_like"]) is False
+
+    cleaned_excluded = preprocess_dataset(
+        PreprocessConfig(
+            input_path=input_path,
+            output_dir=tmp_path / "processed_excluded",
+            exclude_commercial_like=True,
+        )
+    )
+
+    assert cleaned_excluded["url"].tolist() == ["u2"]

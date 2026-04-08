@@ -8,6 +8,7 @@ from src.modeling.regression import (
     _build_test_results_frame,
     _coerce_feature_matrix,
     _group_metrics_table,
+    _linear_baseline_feature_columns,
     _make_stratification_bins,
     _prune_feature_columns,
     _split_feature_columns,
@@ -22,6 +23,41 @@ def test_prune_feature_columns_drops_year_when_age_exists() -> None:
     assert "year" not in pruned
     assert "age" in pruned
     assert dropped == ["year"]
+
+
+def test_linear_baseline_feature_columns_drop_derived_and_duplicate_market_flags() -> None:
+    feature_cols = [
+        "brand",
+        "model",
+        "condition",
+        "seller_type",
+        "age",
+        "commercial_signal_count",
+        "is_commercial_like",
+        "description_len",
+        "mileage",
+        "region",
+    ]
+
+    pruned, dropped = _linear_baseline_feature_columns(feature_cols)
+
+    assert "brand" in pruned
+    assert "model" in pruned
+    assert "condition" in pruned
+    assert "age" in pruned
+    assert "mileage" in pruned
+    assert "seller_type" not in pruned
+    assert "commercial_signal_count" not in pruned
+    assert "is_commercial_like" not in pruned
+    assert "description_len" not in pruned
+    assert "region" not in pruned
+    assert dropped == [
+        "seller_type",
+        "commercial_signal_count",
+        "is_commercial_like",
+        "description_len",
+        "region",
+    ]
 
 
 def test_make_stratification_bins_returns_balanced_bins_when_possible() -> None:

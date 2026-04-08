@@ -59,6 +59,10 @@ class ScrapeConfig:
     challenge_cooldown_seconds: int = 90
     max_consecutive_challenge_pages: int = 2
     challenge_retries_per_page: int = 1
+    debug_browser: bool = False
+    slow_mo_ms: int = 0
+    pause_on_page: bool = False
+    highlight_selectors: bool = False
 
 
 class AutoRuScraper:
@@ -70,6 +74,10 @@ class AutoRuScraper:
             timeout_seconds=config.timeout_seconds,
             min_delay_seconds=config.min_delay_seconds,
             max_delay_seconds=config.max_delay_seconds,
+            debug_browser=config.debug_browser,
+            slow_mo_ms=config.slow_mo_ms,
+            pause_on_page=config.pause_on_page,
+            highlight_selectors=config.highlight_selectors,
         )
 
         self.fetcher = PlaywrightFetcher(fetcher_config) if config.use_playwright else RequestsFetcher(fetcher_config)
@@ -245,6 +253,16 @@ class AutoRuScraper:
         ):
             LOGGER.info("Resume state contains no parsed listings. Restarting catalog scan from page 1.")
             start_page = 1
+
+        if start_page > self.config.pages:
+            LOGGER.warning(
+                "No catalog pages to scan: resolved start_page=%s while pages=%s. "
+                "Resume state likely already covers this range. Use --start-page to override "
+                "or choose another --state-file for a clean debug run.",
+                start_page,
+                self.config.pages,
+            )
+            return []
 
         for page_number in range(start_page, self.config.pages + 1):
             page_url = self._catalog_page_url(page_number)

@@ -1,18 +1,24 @@
 .DS_Store
+**/.DS_Store
 .env
 .pytest_cache/
 __pycache__/
 *.pyc
 
+.venv
 .venv/
+.venv.backup-*/
 .venv313/
 
-data/raw/
-data/processed/
-reports/
-figures/
-models/
-logs/
+/data/raw/
+/data/processed/
+/reports/
+/figures/
+/models/
+/logs/
+/exports/
+/Users/
+*.zip
 
 .coverage
 htmlcov/

@@ -55,6 +55,27 @@ def _build_parser() -> argparse.ArgumentParser:
         help="JSONL checkpoint file",
     )
     scrape_parser.add_argument("--playwright", action="store_true", help="Use Playwright backend")
+    scrape_parser.add_argument(
+        "--debug-browser",
+        action="store_true",
+        help="Open Playwright browser visibly for debugging",
+    )
+    scrape_parser.add_argument(
+        "--slow-mo",
+        type=int,
+        default=0,
+        help="Slow down Playwright actions in milliseconds",
+    )
+    scrape_parser.add_argument(
+        "--pause-on-page",
+        action="store_true",
+        help="Pause Playwright on each opened page",
+    )
+    scrape_parser.add_argument(
+        "--highlight-selectors",
+        action="store_true",
+        help="Highlight matched selectors on page",
+    )
     scrape_parser.add_argument("--timeout", type=int, default=30, help="Request timeout in seconds")
     scrape_parser.add_argument("--min-delay", type=float, default=1.2, help="Minimum delay between requests")
     scrape_parser.add_argument("--max-delay", type=float, default=3.0, help="Maximum delay between requests")
@@ -125,6 +146,10 @@ def _build_parser() -> argparse.ArgumentParser:
     full_parser.add_argument("--pages", type=int, default=20)
     full_parser.add_argument("--start-page", type=int, default=None)
     full_parser.add_argument("--playwright", action="store_true")
+    full_parser.add_argument("--debug-browser", action="store_true")
+    full_parser.add_argument("--slow-mo", type=int, default=0)
+    full_parser.add_argument("--pause-on-page", action="store_true")
+    full_parser.add_argument("--highlight-selectors", action="store_true")
     full_parser.add_argument("--timeout", type=int, default=30)
     full_parser.add_argument("--min-delay", type=float, default=1.2)
     full_parser.add_argument("--max-delay", type=float, default=3.0)
@@ -148,6 +173,10 @@ def _run_scrape(args: argparse.Namespace) -> Path:
         state_file=args.state_file,
         checkpoint_jsonl=args.checkpoint_jsonl,
         use_playwright=args.playwright,
+        debug_browser=args.debug_browser,
+        slow_mo_ms=args.slow_mo,
+        pause_on_page=args.pause_on_page,
+        highlight_selectors=args.highlight_selectors,
         timeout_seconds=args.timeout,
         min_delay_seconds=args.min_delay,
         max_delay_seconds=args.max_delay,
@@ -222,6 +251,10 @@ def main() -> None:
                 state_file=RAW_DATA_DIR / "autoru_state.json",
                 checkpoint_jsonl=RAW_DATA_DIR / "autoru_checkpoint.jsonl",
                 playwright=args.playwright,
+                debug_browser=args.debug_browser,
+                slow_mo=args.slow_mo,
+                pause_on_page=args.pause_on_page,
+                highlight_selectors=args.highlight_selectors,
                 timeout=args.timeout,
                 min_delay=args.min_delay,
                 max_delay=args.max_delay,

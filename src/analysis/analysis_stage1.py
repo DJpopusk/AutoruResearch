@@ -33,6 +33,33 @@ class Stage1Config:
     min_group_size: int = 10
 
 
+def _effect_strength_label(value: float, *, metric: str) -> str:
+    """Map association magnitude to a coarse verbal interpretation."""
+    absolute = abs(float(value))
+
+    if metric == "spearman":
+        if absolute < 0.10:
+            return "negligible"
+        if absolute < 0.30:
+            return "weak"
+        if absolute < 0.50:
+            return "moderate"
+        if absolute < 0.70:
+            return "strong"
+        return "very_strong"
+
+    if metric == "cramers_v":
+        if absolute < 0.10:
+            return "negligible"
+        if absolute < 0.30:
+            return "weak"
+        if absolute < 0.50:
+            return "moderate"
+        return "strong"
+
+    raise ValueError(f"Unknown metric for effect interpretation: {metric}")
+
+
 def _cramers_v(confusion_matrix: pd.DataFrame) -> float:
     """Compute Cramer's V with bias correction."""
     chi2 = stats.chi2_contingency(confusion_matrix)[0]
@@ -227,14 +254,19 @@ def _factor_influence(
         pair = df[[feature, "price"]].dropna()
         if len(pair) < 10:
             continue
-        pearson = pair[feature].corr(pair["price"], method="pearson")
-        spearman = pair[feature].corr(pair["price"], method="spearman")
+        pearson_stat, pearson_pvalue = stats.pearsonr(pair[feature], pair["price"])
+        spearman_stat, spearman_pvalue = stats.spearmanr(pair[feature], pair["price"])
         corr_rows.append(
             {
                 "feature": feature,
-                "pearson_with_price": float(pearson),
-                "spearman_with_price": float(spearman),
-                "abs_spearman": abs(float(spearman)),
+                "pearson_with_price": float(pearson_stat),
+                "pearson_pvalue": float(pearson_pvalue),
+                "pearson_significant_at_0_05": bool(pearson_pvalue < 0.05),
+                "spearman_with_price": float(spearman_stat),
+                "spearman_pvalue": float(spearman_pvalue),
+                "spearman_significant_at_0_05": bool(spearman_pvalue < 0.05),
+                "spearman_strength": _effect_strength_label(float(spearman_stat), metric="spearman"),
+                "abs_spearman": abs(float(spearman_stat)),
             }
         )
 
@@ -252,13 +284,17 @@ def _factor_influence(
             continue
 
         chi2, pvalue, _, _ = stats.chi2_contingency(contingency)
+        cramers_v = _cramers_v(contingency)
         cat_assoc_rows.append(
             {
                 "feature": feature,
                 "chi2": float(chi2),
                 "pvalue": float(pvalue),
-                "cramers_v": _cramers_v(contingency),
+                "chi2_pvalue": float(pvalue),
+                "cramers_v": cramers_v,
+                "cramers_v_strength": _effect_strength_label(cramers_v, metric="cramers_v"),
                 "significant_at_0_05": bool(pvalue < 0.05),
+                "chi2_significant_at_0_05": bool(pvalue < 0.05),
             }
         )
 

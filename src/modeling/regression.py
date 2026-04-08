@@ -212,6 +212,33 @@ def _prune_feature_columns(feature_cols: list[str]) -> tuple[list[str], list[str
     return pruned, dropped_features
 
 
+def _linear_baseline_feature_columns(feature_cols: list[str]) -> tuple[list[str], list[str]]:
+    """Build a compact, interpretable feature set for plain linear models."""
+    pruned, dropped_features = _prune_feature_columns(feature_cols)
+
+    excluded_for_linear = [
+        "seller_type",
+        "commercial_signal_count",
+        "is_commercial_like",
+        "description_len",
+        "owners_count",
+        "color",
+        "body_type",
+        "steering_wheel",
+        "pts_type",
+        "customs",
+        "region",
+    ]
+
+    linear_pruned = pruned.copy()
+    for column in excluded_for_linear:
+        if column in linear_pruned:
+            linear_pruned.remove(column)
+            dropped_features.append(column)
+
+    return linear_pruned, dropped_features
+
+
 def _make_stratification_bins(
     y: pd.Series,
     *,
@@ -474,6 +501,7 @@ def run_regression_experiment(df: pd.DataFrame, config: RegressionConfig) -> dic
     }
     feature_cols = [col for col in model_df.columns if col not in drop_cols]
     feature_cols, dropped_features = _prune_feature_columns(feature_cols)
+    linear_feature_cols, linear_dropped_features = _linear_baseline_feature_columns(feature_cols)
 
     X = model_df[feature_cols]
     y = model_df[config.target_column].astype(float)
@@ -483,6 +511,9 @@ def run_regression_experiment(df: pd.DataFrame, config: RegressionConfig) -> dic
     numeric_cols = [col for col in numeric_cols if X[col].notna().any()]
     categorical_cols = [col for col in categorical_cols if X[col].notna().any()]
     X = _coerce_feature_matrix(X[numeric_cols + categorical_cols], numeric_cols, categorical_cols)
+
+    linear_numeric_cols = [col for col in numeric_cols if col in linear_feature_cols]
+    linear_categorical_cols = [col for col in categorical_cols if col in linear_feature_cols]
 
     stratify_bins = _make_stratification_bins(
         y,
@@ -505,8 +536,8 @@ def run_regression_experiment(df: pd.DataFrame, config: RegressionConfig) -> dic
         "linear_regression": (
             _wrap_target_transform(
                 _build_pipeline_regressor(
-                    numeric_cols=numeric_cols,
-                    categorical_cols=categorical_cols,
+                    numeric_cols=linear_numeric_cols,
+                    categorical_cols=linear_categorical_cols,
                     scale_numeric=True,
                     model=LinearRegression(),
                 )
@@ -515,8 +546,8 @@ def run_regression_experiment(df: pd.DataFrame, config: RegressionConfig) -> dic
         "ridge": (
             _wrap_target_transform(
                 _build_pipeline_regressor(
-                    numeric_cols=numeric_cols,
-                    categorical_cols=categorical_cols,
+                    numeric_cols=linear_numeric_cols,
+                    categorical_cols=linear_categorical_cols,
                     scale_numeric=True,
                     model=Ridge(random_state=config.random_state),
                 )
@@ -525,8 +556,8 @@ def run_regression_experiment(df: pd.DataFrame, config: RegressionConfig) -> dic
         "lasso": (
             _wrap_target_transform(
                 _build_pipeline_regressor(
-                    numeric_cols=numeric_cols,
-                    categorical_cols=categorical_cols,
+                    numeric_cols=linear_numeric_cols,
+                    categorical_cols=linear_categorical_cols,
                     scale_numeric=True,
                     model=Lasso(random_state=config.random_state, max_iter=50_000),
                 )
@@ -646,7 +677,14 @@ def run_regression_experiment(df: pd.DataFrame, config: RegressionConfig) -> dic
         estimator=_wrap_target_transform(
             Pipeline(
                 steps=[
-                    ("preprocessor", _build_preprocessor(numeric_cols, categorical_cols, scale_numeric=True)),
+                    (
+                        "preprocessor",
+                        _build_preprocessor(
+                            linear_numeric_cols,
+                            linear_categorical_cols,
+                            scale_numeric=True,
+                        ),
+                    ),
                     ("model", Ridge(random_state=config.random_state)),
                 ]
             )
@@ -802,6 +840,8 @@ def run_regression_experiment(df: pd.DataFrame, config: RegressionConfig) -> dic
         "test_rows": int(len(X_test)),
         "features_count": int(X.shape[1]),
         "dropped_features": dropped_features,
+        "linear_baseline_features_count": int(len(linear_feature_cols)),
+        "linear_baseline_dropped_features": linear_dropped_features,
         "target_transform": "log1p/expm1",
         "used_stratified_split": used_stratified_split,
         "used_stratified_cv": used_stratified_cv,
@@ -830,6 +870,8 @@ def run_regression_experiment(df: pd.DataFrame, config: RegressionConfig) -> dic
         "",
         "## Feature handling",
         f"- Dropped redundant features: `{', '.join(dropped_features) if dropped_features else 'none'}`",
+        f"- Dry linear baseline features count: `{len(linear_feature_cols)}`",
+        f"- Dry linear baseline excluded features: `{', '.join(linear_dropped_features) if linear_dropped_features else 'none'}`",
         "",
         "## Saved artifacts",
         f"- Best model: `{model_path}`",

@@ -25,8 +25,8 @@ from functions.scraper import ScrapeConfig, run_scrape
 
 
 def _coerce_paths(payload: dict) -> dict:
-    for key in ("output_csv", "output_parquet", "state_file", "checkpoint_jsonl"):
-        if key in payload and not isinstance(payload[key], Path):
+    for key in ("output_csv", "output_parquet", "state_file", "checkpoint_jsonl", "aggregate_parquet"):
+        if key in payload and payload[key] is not None and not isinstance(payload[key], Path):
             payload[key] = Path(payload[key]).expanduser().resolve()
     return payload
 

@@ -15,7 +15,7 @@ import pandas as pd
 from functions.constants import AUTORU_SCHEMA
 from functions.extractors import canonicalize_columns, extract_listing_record, parse_listing_links
 from functions.fetchers import FetcherConfig, PlaywrightFetcher, RequestsFetcher
-from functions.io import ensure_dir, load_tabular, save_dataframe, write_json
+from functions.io import append_to_aggregate, ensure_dir, load_tabular, save_dataframe, write_json
 from functions.text import update_query_param
 
 LOGGER = logging.getLogger(__name__)
@@ -49,6 +49,9 @@ class ScrapeConfig:
     output_parquet: Path
     state_file: Path
     checkpoint_jsonl: Path
+    # Общий parquet, в который дописывается результат каждого прогона (дедуп по url).
+    # None — агрегация выключена (пишется только output_parquet этого прогона).
+    aggregate_parquet: Path | None = None
     start_page: int | None = None
     use_playwright: bool = False
     timeout_seconds: int = 30
@@ -615,6 +618,18 @@ class AutoRuScraper:
             self.config.output_csv,
             self.config.output_parquet,
         )
+
+        # Дописываем прогон в общий parquet (если включена агрегация)
+        if self.config.aggregate_parquet is not None:
+            run_tag = self.config.output_parquet.parent.name
+            combined = append_to_aggregate(parsed_df, self.config.aggregate_parquet, run_tag=run_tag)
+            LOGGER.info(
+                "Appended run '%s' to aggregate %s: %s total unique rows",
+                run_tag,
+                self.config.aggregate_parquet,
+                len(combined),
+            )
+
         return parsed_df
 
 

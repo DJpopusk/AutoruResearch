@@ -21,6 +21,38 @@ def save_dataframe(df: pd.DataFrame, csv_path: Path, parquet_path: Path) -> None
     df.to_parquet(parquet_path, index=False)
 
 
+def append_to_aggregate(
+    df: pd.DataFrame,
+    aggregate_path: Path | str,
+    run_tag: str | None = None,
+    dedup_key: str = "url",
+) -> pd.DataFrame:
+    """Дописывает df прогона в общий parquet с дедупликацией.
+
+    - Помечает строки колонкой ``source_run`` (= run_tag), чтобы знать, из какого прогона запись.
+    - Если общий parquet уже есть — конкатенирует и дедуплицирует по ``dedup_key`` (keep=last).
+    - Возвращает объединённый датафрейм.
+    """
+    aggregate_path = Path(aggregate_path)
+    ensure_dir(aggregate_path.parent)
+
+    df = df.copy()
+    if run_tag is not None and "source_run" not in df.columns:
+        df["source_run"] = run_tag
+
+    if aggregate_path.exists():
+        existing = pd.read_parquet(aggregate_path)
+        combined = pd.concat([existing, df], ignore_index=True)
+    else:
+        combined = df
+
+    if dedup_key in combined.columns:
+        combined = combined.drop_duplicates(subset=[dedup_key], keep="last").reset_index(drop=True)
+
+    combined.to_parquet(aggregate_path, index=False)
+    return combined
+
+
 def load_tabular(path: Path | str) -> pd.DataFrame:
     path = Path(path)
     suffix = path.suffix.lower()

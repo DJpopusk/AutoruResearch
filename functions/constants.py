@@ -10,6 +10,8 @@ DATA_DIR = PROJECT_ROOT / "data"
 RAW_DATA_DIR = DATA_DIR / "raw"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
 NOTEBOOK_RUN_DIR = RAW_DATA_DIR / "notebook_run"
+# Общий parquet, куда дописывается каждый прогон парсера (дедуп по url).
+AGGREGATE_PARQUET = RAW_DATA_DIR / "autoru_raw_all.parquet"
 
 AUTORU_SCHEMA = [
     # базовые (со страницы объявления)

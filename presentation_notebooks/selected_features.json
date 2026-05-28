@@ -1,0 +1,29 @@
+{
+  "keep": [
+    "rear_track_width",
+    "max_torque_nm",
+    "gears_count",
+    "age",
+    "wheelbase",
+    "acceleration_0_100",
+    "valves_per_cylinder",
+    "tax_amount",
+    "owners_count",
+    "mileage",
+    "height",
+    "engine_volume",
+    "fuel_tank_volume",
+    "clearance",
+    "trunk_volume",
+    "fuel_consumption_mixed"
+  ],
+  "drop": [
+    "engine_power_hp",
+    "cylinders_count",
+    "length",
+    "width",
+    "front_track_width",
+    "weight_curb",
+    "max_speed"
+  ]
+}
